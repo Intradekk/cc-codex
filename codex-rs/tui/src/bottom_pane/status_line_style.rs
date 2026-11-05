@@ -4,7 +4,6 @@ use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::style::Styled;
 use ratatui::text::Line;
-use ratatui::text::Span;
 
 use super::status_line_setup::StatusLineItem;
 use crate::render::highlight::foreground_style_for_scopes;
@@ -37,6 +36,7 @@ impl StatusLineAccent {
     fn for_item(item: StatusLineItem) -> Self {
         match item {
             StatusLineItem::ModelName
+            | StatusLineItem::Claude
             | StatusLineItem::ModelWithReasoning
             | StatusLineItem::Provider
             | StatusLineItem::Reasoning => Self::Model,
@@ -51,6 +51,7 @@ impl StatusLineAccent {
             | StatusLineItem::UsedTokens
             | StatusLineItem::TotalInputTokens
             | StatusLineItem::TotalOutputTokens
+            | StatusLineItem::TotalCachedInputTokens
             | StatusLineItem::ThreadCredits
             | StatusLineItem::EstimatedThreadCost => Self::Usage,
             StatusLineItem::FiveHourLimit | StatusLineItem::WeeklyLimit => Self::Limit,
@@ -94,33 +95,40 @@ impl StatusLineAccent {
     }
 }
 
-pub(crate) fn status_line_from_segments<I>(
+pub(crate) fn status_line_from_segments<I, T>(
     segments: I,
     use_theme_colors: bool,
     thread_id: Option<ThreadId>,
 ) -> Option<Line<'static>>
 where
-    I: IntoIterator<Item = (StatusLineItem, String)>,
+    I: IntoIterator<Item = (StatusLineItem, T)>,
+    T: Into<Line<'static>>,
 {
     status_line_from_segments_with_resolver(segments, use_theme_colors, thread_id, |accent| {
         foreground_style_for_scopes(accent.scopes())
     })
 }
 
-fn status_line_from_segments_with_resolver<I, F>(
+fn status_line_from_segments_with_resolver<I, T, F>(
     segments: I,
     use_theme_colors: bool,
     thread_id: Option<ThreadId>,
     theme_style_for_accent: F,
 ) -> Option<Line<'static>>
 where
-    I: IntoIterator<Item = (StatusLineItem, String)>,
+    I: IntoIterator<Item = (StatusLineItem, T)>,
+    T: Into<Line<'static>>,
     F: Fn(StatusLineAccent) -> Option<Style>,
 {
     let mut spans = Vec::new();
     for (item, text) in segments {
         if !spans.is_empty() {
             spans.push(STATUS_LINE_SEPARATOR.set_style(secondary_text_style()));
+        }
+        let line = text.into();
+        if item == StatusLineItem::Claude {
+            spans.extend(line.spans);
+            continue;
         }
         let style = if use_theme_colors
             && matches!(
@@ -155,7 +163,10 @@ where
         } else {
             style
         };
-        spans.push(Span::styled(text, style));
+        for mut span in line.spans {
+            span.style = span.style.patch(style);
+            spans.push(span);
+        }
     }
 
     (!spans.is_empty()).then(|| Line::from(spans))

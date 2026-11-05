@@ -4,6 +4,7 @@
 //! behavior easier to review without paging through the rest of `chatwidget.rs`.
 
 use super::*;
+use crate::bottom_pane::ClaudeStatusLine;
 use crate::bottom_pane::status_line_from_segments;
 use crate::branch_summary;
 use crate::chatwidget::limit_label_for_window;
@@ -61,6 +62,7 @@ struct StatusSurfaceSelections {
 impl StatusSurfaceSelections {
     fn uses_git_branch(&self) -> bool {
         self.status_line_items.contains(&StatusLineItem::GitBranch)
+            || self.status_line_items.contains(&StatusLineItem::Claude)
             || self
                 .terminal_title_items
                 .contains(&TerminalTitleItem::GitBranch)
@@ -212,8 +214,25 @@ impl ChatWidget {
 
         let mut segments = Vec::new();
         for item in &selections.status_line_items {
-            if let Some(value) = self.status_line_value_for_item(*item) {
-                segments.push((*item, value));
+            if *item == StatusLineItem::Claude {
+                let data = self.claude_status_line();
+                if data
+                    .limit
+                    .as_ref()
+                    .is_some_and(|(_, _, reset)| reset.is_some())
+                {
+                    self.frame_requester
+                        .schedule_frame_in(Duration::from_secs(60));
+                }
+                segments.push((
+                    *item,
+                    data.render(
+                        self.local_settings.tui.status_line_use_colors,
+                        chrono::Utc::now().timestamp(),
+                    ),
+                ));
+            } else if let Some(value) = self.status_line_value_for_item(*item) {
+                segments.push((*item, Line::from(value)));
             }
         }
 
@@ -673,13 +692,12 @@ impl ChatWidget {
             })
     }
 
-    pub(super) fn refresh_status_line_if_workspace_headline_due(&mut self) {
+    pub(super) fn refresh_status_line_if_due(&mut self) {
         let now = Instant::now();
-        if self.status_line_workspace_headline_should_fetch(now)
-            && self
-                .status_line_items_with_invalids()
-                .0
-                .contains(&StatusLineItem::WorkspaceHeadline)
+        let (items, _) = self.status_line_items_with_invalids();
+        if items.contains(&StatusLineItem::Claude)
+            || (self.status_line_workspace_headline_should_fetch(now)
+                && items.contains(&StatusLineItem::WorkspaceHeadline))
         {
             self.refresh_status_line();
         }
@@ -728,6 +746,11 @@ impl ChatWidget {
     /// git metadata.
     pub(super) fn status_line_value_for_item(&mut self, item: StatusLineItem) -> Option<String> {
         match item {
+            StatusLineItem::Claude => Some(
+                self.claude_status_line()
+                    .render(/*use_colors*/ false, chrono::Utc::now().timestamp())
+                    .to_string(),
+            ),
             StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
             StatusLineItem::ModelWithReasoning => Some(self.model_with_reasoning_display_name()),
             StatusLineItem::Reasoning => Some(self.reasoning_display_name()),
@@ -816,6 +839,12 @@ impl ChatWidget {
                     format_tokens_compact(self.status_line_total_usage().output_tokens)
                 )
             }),
+            StatusLineItem::TotalCachedInputTokens => (!self.token_usage_pending).then(|| {
+                format!(
+                    "{} cached",
+                    format_tokens_compact(self.status_line_total_usage().cached_input())
+                )
+            }),
             StatusLineItem::ThreadCredits => self
                 .estimated_thread_usage()
                 .filter(|_| self.plan_type != Some(PlanType::Ent26))
@@ -864,6 +893,7 @@ impl ChatWidget {
         item: StatusSurfacePreviewItem,
     ) -> Option<String> {
         let status_line_item = match item {
+            StatusSurfacePreviewItem::Claude => StatusLineItem::Claude,
             StatusSurfacePreviewItem::AppName => return Some("codex".to_string()),
             StatusSurfacePreviewItem::ProjectName => return self.terminal_title_project_name(),
             StatusSurfacePreviewItem::ProjectRoot => StatusLineItem::ProjectRoot,
@@ -887,6 +917,9 @@ impl ChatWidget {
             StatusSurfacePreviewItem::UsedTokens => StatusLineItem::UsedTokens,
             StatusSurfacePreviewItem::TotalInputTokens => StatusLineItem::TotalInputTokens,
             StatusSurfacePreviewItem::TotalOutputTokens => StatusLineItem::TotalOutputTokens,
+            StatusSurfacePreviewItem::TotalCachedInputTokens => {
+                StatusLineItem::TotalCachedInputTokens
+            }
             StatusSurfacePreviewItem::ThreadCredits => StatusLineItem::ThreadCredits,
             StatusSurfacePreviewItem::EstimatedThreadCost => StatusLineItem::EstimatedThreadCost,
             StatusSurfacePreviewItem::SessionId => StatusLineItem::SessionId,
@@ -984,6 +1017,48 @@ impl ChatWidget {
                 /*max_chars*/ 32,
             )),
             TerminalTitleItem::TaskProgress => self.terminal_title_task_progress(),
+        }
+    }
+
+    pub(super) fn claude_status_line(&self) -> ClaudeStatusLine {
+        let limit = self
+            .rate_limit_snapshots_by_limit_id
+            .get("codex")
+            .and_then(|snapshot| {
+                let (window, secondary) = find_codex_window(snapshot, "5h")
+                    .or_else(|| find_codex_window(snapshot, "weekly"))?;
+                let label = if matches_window_label(window, "weekly") {
+                    "7d".to_string()
+                } else {
+                    limit_label_for_window(window.window_minutes, secondary)
+                };
+                Some((
+                    label,
+                    window.used_percent.clamp(0.0, 100.0).round() as u8,
+                    window.resets_at_timestamp,
+                ))
+            });
+        let context = (!self.token_usage_pending).then(|| {
+            let used = self
+                .token_info
+                .as_ref()
+                .map_or(0, |info| info.last_token_usage.input_tokens.max(0));
+            (used, self.status_line_context_window_size())
+        });
+        let tier = self
+            .processing_tier_display_name()
+            .map(|tier| format!(" {tier}"))
+            .unwrap_or_default();
+        ClaudeStatusLine {
+            model: format!(
+                "{} ({}){tier}",
+                self.model_display_name(),
+                self.reasoning_display_name(),
+            ),
+            cwd: format_directory_display(self.status_line_cwd(), /*max_width*/ None),
+            branch: self.status_line_branch.clone(),
+            limit,
+            context,
         }
     }
 

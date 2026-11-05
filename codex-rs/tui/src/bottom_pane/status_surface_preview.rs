@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use codex_protocol::ThreadId;
 use ratatui::text::Line;
 
+use super::ClaudeStatusLine;
 use super::status_line_from_segments;
 use super::status_line_setup::StatusLineItem;
 
@@ -30,6 +31,7 @@ pub(crate) enum StatusSurfacePreviewItem {
     UsedTokens,
     TotalInputTokens,
     TotalOutputTokens,
+    TotalCachedInputTokens,
     ThreadCredits,
     EstimatedThreadCost,
     SessionId,
@@ -43,11 +45,13 @@ pub(crate) enum StatusSurfacePreviewItem {
     Profile,
     Provider,
     TaskProgress,
+    Claude,
 }
 
 impl StatusSurfacePreviewItem {
     fn placeholder(self) -> &'static str {
         match self {
+            StatusSurfacePreviewItem::Claude => "🤖 gpt-5 (medium) | 📁 ~/my-project",
             StatusSurfacePreviewItem::AppName => "codex",
             StatusSurfacePreviewItem::ProjectName => "my-project",
             StatusSurfacePreviewItem::ProjectRoot => "my-project",
@@ -70,6 +74,7 @@ impl StatusSurfacePreviewItem {
             StatusSurfacePreviewItem::UsedTokens => "0 used",
             StatusSurfacePreviewItem::TotalInputTokens => "0 in",
             StatusSurfacePreviewItem::TotalOutputTokens => "0 out",
+            StatusSurfacePreviewItem::TotalCachedInputTokens => "0 cached",
             StatusSurfacePreviewItem::ThreadCredits => "5.2 credits",
             StatusSurfacePreviewItem::EstimatedThreadCost => "~$1.82",
             StatusSurfacePreviewItem::SessionId => "550e8400-e29b-41d4",
@@ -110,6 +115,7 @@ impl StatusSurfacePreviewItem {
             Self::UsedTokens,
             Self::TotalInputTokens,
             Self::TotalOutputTokens,
+            Self::TotalCachedInputTokens,
             Self::ThreadCredits,
             Self::EstimatedThreadCost,
             Self::SessionId,
@@ -123,6 +129,7 @@ impl StatusSurfacePreviewItem {
             Self::Profile,
             Self::Provider,
             Self::TaskProgress,
+            Self::Claude,
         ]
         .into_iter()
     }
@@ -137,6 +144,7 @@ struct PreviewValue {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StatusSurfacePreviewData {
     pub(crate) thread_id: Option<ThreadId>,
+    pub(crate) claude: Option<ClaudeStatusLine>,
     values: BTreeMap<StatusSurfacePreviewItem, PreviewValue>,
 }
 
@@ -144,6 +152,7 @@ impl Default for StatusSurfacePreviewData {
     fn default() -> Self {
         let mut data = Self {
             thread_id: None,
+            claude: None,
             values: BTreeMap::new(),
         };
         for item in StatusSurfacePreviewItem::iter() {
@@ -251,8 +260,16 @@ impl StatusSurfacePreviewData {
         I: IntoIterator<Item = StatusLineItem>,
     {
         let segments = items.into_iter().filter_map(|item| {
+            if item == StatusLineItem::Claude
+                && let Some(claude) = &self.claude
+            {
+                return Some((
+                    item,
+                    claude.render(use_theme_colors, chrono::Utc::now().timestamp()),
+                ));
+            }
             self.value_for(item.preview_item())
-                .map(|value| (item, value.to_string()))
+                .map(|value| (item, Line::from(value.to_string())))
         });
         status_line_from_segments(segments, use_theme_colors, self.thread_id)
     }

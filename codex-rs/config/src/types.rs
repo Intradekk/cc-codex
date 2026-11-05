@@ -962,11 +962,11 @@ pub struct Tui {
     /// Ordered list of status line item identifiers.
     ///
     /// When set, the TUI renders the selected items as the status line.
-    /// When unset, the TUI defaults to: `model-with-reasoning`, `current-dir`, and `thread-name`.
+    /// When unset, the TUI defaults to the `claude` subscription layout.
     #[serde(default)]
     pub status_line: Option<Vec<String>>,
 
-    /// Color status line items with colors derived from the active syntax theme.
+    /// Color status line items using the syntax theme, or usage thresholds in the `claude` layout.
     /// Defaults to `true`.
     #[serde(default = "default_true")]
     pub status_line_use_colors: bool,

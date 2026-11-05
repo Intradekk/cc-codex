@@ -5425,7 +5425,7 @@
         },
         "status_line": {
           "default": null,
-          "description": "Ordered list of status line item identifiers.\n\nWhen set, the TUI renders the selected items as the status line. When unset, the TUI defaults to: `model-with-reasoning`, `current-dir`, and `thread-name`.",
+          "description": "Ordered list of status line item identifiers.\n\nWhen set, the TUI renders the selected items as the status line. When unset, the TUI defaults to the `claude` subscription layout.",
           "items": {
             "type": "string"
           },
@@ -5433,7 +5433,7 @@
         },
         "status_line_use_colors": {
           "default": true,
-          "description": "Color status line items with colors derived from the active syntax theme. Defaults to `true`.",
+          "description": "Color status line items using the syntax theme, or usage thresholds in the `claude` layout. Defaults to `true`.",
           "type": "boolean"
         },
         "terminal_resize_reflow_max_rows": {

@@ -129,6 +129,9 @@ pub(crate) enum StatusLineItem {
     /// Total output tokens generated.
     TotalOutputTokens,
 
+    /// Total input tokens read from cache, included in total input tokens.
+    TotalCachedInputTokens,
+
     /// Estimated credits attributed directly to the current enterprise thread.
     ThreadCredits,
 
@@ -166,12 +169,18 @@ pub(crate) enum StatusLineItem {
     /// Model provider ID for the active thread.
     #[strum(to_string = "provider", serialize = "model-provider")]
     Provider,
+
+    /// Claude-style subscription layout with cwd immediately after the model.
+    Claude,
 }
 
 impl StatusLineItem {
     /// User-visible description shown in the popup.
     pub(crate) fn description(self) -> &'static str {
         match self {
+            StatusLineItem::Claude => {
+                "Claude-style model, directory, branch, subscription limit, and context"
+            }
             StatusLineItem::ModelName => "Current model name",
             StatusLineItem::ModelWithReasoning => "Current model name with reasoning level",
             StatusLineItem::Reasoning => "Current reasoning level",
@@ -211,6 +220,9 @@ impl StatusLineItem {
             StatusLineItem::UsedTokens => "Total tokens used in session (omitted when zero)",
             StatusLineItem::TotalInputTokens => "Total input tokens used in session",
             StatusLineItem::TotalOutputTokens => "Total output tokens used in session",
+            StatusLineItem::TotalCachedInputTokens => {
+                "Total cached input tokens in session (included in total input tokens)"
+            }
             StatusLineItem::ThreadCredits => {
                 "Estimated current-thread credits (Enterprise workspaces only; omitted when unavailable)"
             }
@@ -236,6 +248,7 @@ impl StatusLineItem {
 
     pub(crate) fn preview_item(self) -> StatusSurfacePreviewItem {
         match self {
+            StatusLineItem::Claude => StatusSurfacePreviewItem::Claude,
             StatusLineItem::ModelName => StatusSurfacePreviewItem::Model,
             StatusLineItem::ModelWithReasoning => StatusSurfacePreviewItem::ModelWithReasoning,
             StatusLineItem::Reasoning => StatusSurfacePreviewItem::Reasoning,
@@ -259,6 +272,9 @@ impl StatusLineItem {
             StatusLineItem::UsedTokens => StatusSurfacePreviewItem::UsedTokens,
             StatusLineItem::TotalInputTokens => StatusSurfacePreviewItem::TotalInputTokens,
             StatusLineItem::TotalOutputTokens => StatusSurfacePreviewItem::TotalOutputTokens,
+            StatusLineItem::TotalCachedInputTokens => {
+                StatusSurfacePreviewItem::TotalCachedInputTokens
+            }
             StatusLineItem::ThreadCredits => StatusSurfacePreviewItem::ThreadCredits,
             StatusLineItem::EstimatedThreadCost => StatusSurfacePreviewItem::EstimatedThreadCost,
             StatusLineItem::SessionId => StatusSurfacePreviewItem::SessionId,

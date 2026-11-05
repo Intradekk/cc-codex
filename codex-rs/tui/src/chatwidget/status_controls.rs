@@ -372,6 +372,7 @@ impl ChatWidget {
             }),
         );
         preview_data.thread_id = self.thread_id;
+        preview_data.claude = Some(self.claude_status_line());
 
         if self.rate_limit_snapshots_by_limit_id.contains_key("codex") {
             for item in [

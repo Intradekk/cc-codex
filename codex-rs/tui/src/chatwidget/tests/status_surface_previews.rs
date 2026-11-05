@@ -56,11 +56,160 @@ fn status_preview_line(chat: &mut ChatWidget, items: &[StatusLineItem]) -> Strin
     status_preview_line_option(chat, items).expect("status preview line")
 }
 
+#[tokio::test]
+async fn status_line_token_totals_include_cached_input() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let items = [
+        StatusLineItem::TotalInputTokens,
+        StatusLineItem::TotalOutputTokens,
+        StatusLineItem::TotalCachedInputTokens,
+    ];
+    assert_eq!(
+        "total-cached-input-tokens".parse::<StatusLineItem>(),
+        Ok(StatusLineItem::TotalCachedInputTokens)
+    );
+    chat.local_settings.tui.status_line = Some(items.iter().map(ToString::to_string).collect());
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_token_info(/*info*/ None);
+    chat.refresh_status_line();
+    assert_eq!(status_line_text(&chat), None);
+
+    for (cached_input_tokens, expected) in [
+        (200, "900 in · 100 out · 200 cached"),
+        (0, "900 in · 100 out · 0 cached"),
+        (-1, "900 in · 100 out · 0 cached"),
+    ] {
+        let total_token_usage = TokenUsage {
+            input_tokens: 900,
+            output_tokens: 100,
+            cached_input_tokens,
+            total_tokens: 1_000,
+            ..TokenUsage::default()
+        };
+        handle_token_count(
+            &mut chat,
+            Some(TokenUsageInfo {
+                total_token_usage,
+                last_token_usage: TokenUsage::default(),
+                model_context_window: None,
+            }),
+        );
+        chat.refresh_status_line();
+        assert_eq!(status_line_text(&chat).as_deref(), Some(expected));
+        assert_eq!(status_preview_line(&mut chat, &items), expected);
+    }
+}
+
 fn title_preview_line(chat: &mut ChatWidget, items: &[TerminalTitleItem]) -> String {
     let preview_data = chat.terminal_title_preview_data();
     let preview =
         preview_line_for_title_items(items, &preview_data).expect("terminal title preview line");
     line_text(preview)
+}
+
+#[tokio::test]
+async fn claude_status_line_default_tracks_cwd_and_last_prompt_in_preview_and_footer() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.local_settings.tui.status_line = None;
+    assert_eq!(chat.configured_status_line_items(), vec!["claude"]);
+    assert_eq!(
+        "claude".parse::<StatusLineItem>(),
+        Ok(StatusLineItem::Claude)
+    );
+    chat.current_cwd = Some(chat.config.cwd.as_path().join("nested"));
+    chat.status_line_branch_cwd = chat.current_cwd.clone();
+    chat.status_line_branch_lookup_complete = true;
+    chat.status_line_branch = Some("feature/statusline".into());
+    handle_token_count(
+        &mut chat,
+        Some(TokenUsageInfo {
+            total_token_usage: TokenUsage {
+                input_tokens: 900_000,
+                total_tokens: 900_000,
+                ..TokenUsage::default()
+            },
+            last_token_usage: TokenUsage {
+                input_tokens: 75_000,
+                cached_input_tokens: 50_000,
+                total_tokens: 75_000,
+                ..TokenUsage::default()
+            },
+            model_context_window: Some(1_000_000),
+        }),
+    );
+    chat.refresh_status_line();
+    let footer = status_line_text(&chat).expect("Claude status line");
+    assert!(footer.starts_with("🤖 gpt-5 ("), "{footer}");
+    let cwd = format_directory_display(chat.current_cwd.as_deref().unwrap(), None);
+    assert!(
+        footer.contains(&format!(" | 📁 {cwd} | 🌿 feature/statusline")),
+        "{footer}",
+    );
+    assert!(footer.ends_with(" | ctx: 75K/1M"), "{footer}");
+    assert_eq!(
+        status_preview_line(&mut chat, &[StatusLineItem::Claude]),
+        footer,
+    );
+
+    chat.set_token_info(/*info*/ None);
+    chat.refresh_status_line();
+    assert!(!status_line_text(&chat).unwrap().contains("ctx:"));
+    assert!(!status_preview_line(&mut chat, &[StatusLineItem::Claude]).contains("ctx:"));
+
+    chat.local_settings.tui.status_line = Some(Vec::new());
+    chat.refresh_status_line();
+    assert_eq!(status_line_text(&chat), None);
+}
+
+#[tokio::test]
+async fn claude_status_line_prefers_five_hour_limit_and_falls_back_to_weekly() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        normal_model_slug: None,
+        primary: Some(RateLimitWindow {
+            used_percent: 10,
+            window_duration_mins: Some(300),
+            resets_at: Some(161),
+        }),
+        secondary: Some(RateLimitWindow {
+            used_percent: 80,
+            window_duration_mins: Some(7 * 24 * 60),
+            resets_at: None,
+        }),
+        credits: None,
+        individual_limit: None,
+        spend_control_reached: None,
+        plan_type: None,
+        rate_limit_reached_type: None,
+    }));
+    let data = chat.claude_status_line();
+    assert_eq!(data.limit, Some(("5h".into(), 10, Some(161))));
+    assert!(data.render(false, 100).to_string().contains("5h: 10% (2m)"));
+    chat.local_settings.tui.status_line = Some(vec!["claude".into()]);
+    chat.refresh_status_line();
+    assert!(status_line_text(&chat).unwrap().contains("5h: 10% (0m)"));
+    chat.rate_limit_snapshots_by_limit_id
+        .get_mut("codex")
+        .unwrap()
+        .primary
+        .as_mut()
+        .unwrap()
+        .used_percent = 20.0;
+    chat.pre_draw_tick();
+    assert!(status_line_text(&chat).unwrap().contains("5h: 20% (0m)"));
+    let snapshot = chat
+        .rate_limit_snapshots_by_limit_id
+        .get_mut("codex")
+        .unwrap();
+    snapshot.primary = None;
+    assert_eq!(
+        chat.claude_status_line().limit,
+        Some(("7d".into(), 80, None))
+    );
+    chat.rate_limit_snapshots_by_limit_id.clear();
+    assert_eq!(chat.claude_status_line().limit, None);
 }
 
 fn combined_preview_snapshot(

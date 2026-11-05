@@ -468,7 +468,7 @@ const ASK_FOR_APPROVAL_LABEL: &str = "Ask for approval";
 const APPROVE_FOR_ME_LABEL: &str = "Approve for me";
 const AUTO_REVIEW_DESCRIPTION: &str = "Only ask for actions detected as potentially unsafe";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
-const DEFAULT_STATUS_LINE_ITEMS: [&str; 3] = ["model-with-reasoning", "current-dir", "thread-name"];
+const DEFAULT_STATUS_LINE_ITEMS: [&str; 1] = ["claude"];
 
 /// Common initialization parameters shared by all `ChatWidget` constructors.
 pub(crate) struct ChatWidgetInit {
@@ -1205,7 +1205,7 @@ impl ChatWidget {
         {
             self.refresh_terminal_title();
         }
-        self.refresh_status_line_if_workspace_headline_due();
+        self.refresh_status_line_if_due();
         self.refresh_thread_usage_if_settlement_due();
         self.refresh_terminal_program_status();
     }
