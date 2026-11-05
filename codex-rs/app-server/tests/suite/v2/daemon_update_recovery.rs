@@ -53,7 +53,6 @@ async fn managed_restart_resumes_loaded_threads_and_goal_without_client() -> Res
     let mut client = connect_daemon_client(
         &socket_path,
         InitializeCapabilities {
-            required_human_approval: false,
             experimental_api: true,
             extensions: Some(std::collections::HashMap::from([(
                 "io.modelcontextprotocol/ui".into(),
@@ -133,7 +132,6 @@ async fn managed_restart_resumes_loaded_threads_and_goal_without_client() -> Res
     let mut reconnected = connect_daemon_client(
         &socket_path,
         InitializeCapabilities {
-            required_human_approval: false,
             experimental_api: true,
             extensions: Some(std::collections::HashMap::from([(
                 "io.modelcontextprotocol/ui".into(),

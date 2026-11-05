@@ -1141,7 +1141,6 @@ mod tests {
             RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 root_turn_id: None,
-                direct_only_tool_namespaces: None,
                 disabled_plugin_ids: None,
                 cwd: serde_json::from_value(serde_json::json!(cwd)).expect("absolute cwd"),
                 approval_policy,
@@ -2330,7 +2329,6 @@ mod tests {
             .await
             .expect("create paginated thread");
         let paginated_item = RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
-            content_token_count: None,
             thread_id,
             turn_id: "turn-1".to_string(),
             item: TurnItem::UserMessage(UserMessageItem {
@@ -2394,7 +2392,7 @@ mod tests {
             history_mode: ThreadHistoryMode::Legacy,
             history_base: None,
             subagent_history_start_ordinal: None,
-            initial_window_id: codex_protocol::ContextWindowId::new_uuid_v7().to_string(),
+            initial_window_id: uuid::Uuid::now_v7().to_string(),
             runtime_workspace_roots: None,
             metadata: thread_metadata(),
         }

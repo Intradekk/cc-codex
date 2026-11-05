@@ -75,8 +75,7 @@ pub fn system_bwrap_warning(
 impl From<SandboxTransformError> for CodexErr {
     fn from(err: SandboxTransformError) -> Self {
         match err {
-            error @ SandboxTransformError::InvalidPolicy(_)
-            | error @ SandboxTransformError::InvalidCommandCwd { .. }
+            error @ SandboxTransformError::InvalidCommandCwd { .. }
             | error @ SandboxTransformError::InvalidSandboxPolicyCwd { .. } => {
                 CodexErr::InvalidRequest(error.to_string())
             }

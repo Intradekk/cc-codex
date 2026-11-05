@@ -407,7 +407,6 @@ pub async fn build_exec_request(
         .transform(SandboxTransformRequest {
             command,
             permissions: permission_profile,
-            workspace_roots: None,
             sandbox: sandbox_type,
             enforce_managed_network,
             environment_id: network_environment_id.as_deref(),

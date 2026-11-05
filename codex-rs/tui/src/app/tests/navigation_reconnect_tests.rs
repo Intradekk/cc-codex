@@ -287,7 +287,6 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
             &session,
             stale_request,
             Ok(AgentsOverviewThreadRefresh {
-                cleared_unread: Vec::new(),
                 last_messages: HashMap::new(),
                 threads: HashMap::new(),
                 recent_seed_complete: false,
@@ -434,12 +433,8 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
             &session,
             stale_request,
             Ok(AgentsOverviewThreadRefresh {
-                cleared_unread: Vec::new(),
                 last_messages: HashMap::new(),
-                threads: stale_threads
-                    .into_iter()
-                    .map(|(id, thread)| (id, thread.map(|thread| (thread, false))))
-                    .collect(),
+                threads: stale_threads,
                 recent_seed_complete: true,
                 discovery: None,
                 pinned_thread_ids: None,

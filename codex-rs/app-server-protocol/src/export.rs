@@ -51,11 +51,9 @@ const EXPERIMENTAL_CLIENT_METHOD_DEPENDENCY_TYPES: &[&str] = &[
     "BedrockEnvironmentCredential",
     "EnvironmentShellInfo",
     "EnvironmentStatusKind",
-    "GuardianAssessmentOutcome",
     "RemoteControlClient",
     "RemoteControlClientsListOrder",
     "ThreadBackgroundTerminal",
-    "ThreadGuardianAssessment",
     "ThreadSearchOccurrence",
     "ThreadSearchTextRange",
     "TurnSettingsUpdateStatus",
@@ -2425,9 +2423,7 @@ mod tests {
                     || (path == Path::new("v2/ProcessExitedNotification.ts")
                         && field_prefix.trim() == "outputDrainTimedOut?")
                     || (path == Path::new("v2/MisalignmentErrorDetails.ts")
-                        && field_prefix.trim() == "reviewTarget?")
-                    || (path == Path::new("v2/ItemCompletedNotification.ts")
-                        && field_prefix.trim() == "contentTokenCount?");
+                        && field_prefix.trim() == "reviewTarget?");
                 if field_prefix.chars().rev().find(|c| !c.is_whitespace()) == Some('?')
                     && !allow_optional_nullable
                     && !legacy_optional_nullable_field

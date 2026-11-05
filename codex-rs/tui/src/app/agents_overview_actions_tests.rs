@@ -29,21 +29,12 @@ async fn pin_action_updates_shared_section_state() -> Result<()> {
             AppEvent::ToggleAgentsOverviewPin { thread_id, pinned },
         ))
         .await?;
-        let pending = app
-            .agents_overview
-            .pending_pin_change
-            .expect("pin request started");
-        let completed = tokio::time::timeout(std::time::Duration::from_secs(15), async {
-            loop {
-                let event = rx.recv().await.expect("pin request completes");
-                if let AppEvent::AgentsOverviewPinToggled { request_id, .. } = &event
-                    && *request_id == pending
-                {
-                    return event;
-                }
-            }
-        })
-        .await?;
+        assert!(app.agents_overview.pending_pin_change.is_some());
+        let completed = rx.recv().await.expect("pin request completes");
+        assert!(matches!(
+            &completed,
+            AppEvent::AgentsOverviewPinToggled { .. }
+        ));
         app.agents_overview
             .refresh_notifications
             .insert(thread_id, Vec::new());
@@ -57,7 +48,7 @@ async fn pin_action_updates_shared_section_state() -> Result<()> {
         assert_eq!(
             threads
                 .iter()
-                .any(|(thread, _)| thread.id == started.session.thread_id.to_string()),
+                .any(|thread| thread.id == started.session.thread_id.to_string()),
             pinned
         );
     }
@@ -490,8 +481,8 @@ async fn hiding_tasks_keeps_selection_adjacent_in_display_order() -> Result<()> 
             app.agents_overview.visible_thread_ids = view.thread_ids();
             app.chat_widget.show_bottom_pane_view(Box::new(view));
             let expected = match (grouping, filtered) {
-                // Status displays tasks newest first: 4, 3, 2, 1.
-                (AgentsOverviewGrouping::Status, false) => vec![3, 2, 1, 4],
+                // The preceding filtered case retains Other 2; rediscovered tasks append.
+                (AgentsOverviewGrouping::Status, false) => vec![3, 1, 4, 2],
                 (AgentsOverviewGrouping::Status, true) => vec![3, 1, 4],
                 (
                     AgentsOverviewGrouping::Project
@@ -663,8 +654,7 @@ async fn hidden_task_stays_hidden_through_activity_and_seed_until_explicit_resum
         &app_server,
         request_id,
         Ok(AgentsOverviewThreadRefresh {
-            cleared_unread: Vec::new(),
-            threads: HashMap::from([(id, Some((thread.clone(), false)))]),
+            threads: HashMap::from([(id, Some(thread.clone()))]),
             last_messages: HashMap::new(),
             recent_seed_complete: true,
             discovery: None,
@@ -945,11 +935,7 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
             &app_server,
             request_id,
             Ok(AgentsOverviewThreadRefresh {
-                cleared_unread: Vec::new(),
-                threads: stale_threads
-                    .into_iter()
-                    .map(|(id, thread)| (id, thread.map(|thread| (thread, false))))
-                    .collect(),
+                threads: stale_threads,
                 last_messages: HashMap::new(),
                 recent_seed_complete: true,
                 discovery: None,
@@ -1052,7 +1038,6 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
             .send(AppEvent::AgentsOverviewThreadsLoaded {
                 request_id,
                 result: Ok(AgentsOverviewThreadRefresh {
-                    cleared_unread: Vec::new(),
                     threads: HashMap::new(),
                     last_messages: HashMap::new(),
                     recent_seed_complete: true,

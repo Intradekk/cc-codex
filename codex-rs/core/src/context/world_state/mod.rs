@@ -19,7 +19,6 @@ pub(crate) mod test_support;
 mod tools;
 mod top_level_tools;
 
-use crate::AgentSessionReader;
 use crate::context::ContextualUserFragment;
 use codex_extension_api::PreviousWorldStateSection;
 use codex_extension_api::RenderedWorldStateFragment;
@@ -37,7 +36,6 @@ use sha1::Digest;
 use sha1::Sha1;
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
 
 pub(crate) use agents_md::AgentsMdState;
 pub(crate) use apps_instructions::AppsInstructionsState;
@@ -45,8 +43,6 @@ pub(crate) use collaboration_mode::CollaborationModeState;
 pub(crate) use compact_permissions::CompactPermissionsState;
 pub(crate) use context_window_guidance::ContextWindowGuidanceState;
 pub(crate) use environment::EnvironmentsState;
-use environment::RenderedEnvironments;
-pub(crate) use environment::format_agent_paths;
 pub(crate) use environments_instructions::EnvironmentsInstructionsState;
 pub(crate) use managed_developer_instructions::ManagedDeveloperInstructions;
 pub(crate) use managed_developer_instructions::ManagedDeveloperInstructionsState;
@@ -77,42 +73,31 @@ pub(crate) enum Placement {
     Mergeable,
 }
 
-pub(crate) type WorldStateFragment = Box<dyn ContextualUserFragment + Send>;
-
 pub(crate) enum WorldStateUpdateContent {
-    Fragment(WorldStateFragment),
-    Environment(Box<RenderedEnvironments>),
+    Fragment(Box<dyn ContextualUserFragment>),
     Item(Box<ResponseItem>),
 }
 
-impl WorldStateUpdateContent {
-    pub(crate) fn into_fragment(self) -> Result<WorldStateFragment, Box<ResponseItem>> {
-        match self {
-            Self::Fragment(fragment) => Ok(fragment),
-            Self::Environment(environment) => Ok(environment),
-            Self::Item(item) => Err(item),
-        }
-    }
-}
-
 impl WorldStateUpdate {
-    pub(crate) fn fragment(fragment: impl ContextualUserFragment + Send + 'static) -> Self {
+    pub(crate) fn fragment(fragment: impl ContextualUserFragment + 'static) -> Self {
         Self::boxed_fragment(Box::new(fragment))
     }
 
-    fn boxed_fragment(fragment: WorldStateFragment) -> Self {
+    pub(crate) fn boxed_fragment(fragment: Box<dyn ContextualUserFragment>) -> Self {
         Self {
             placement: Placement::Mergeable,
             content: WorldStateUpdateContent::Fragment(fragment),
         }
     }
 
-    pub(crate) fn optional_boxed_fragment(fragment: Option<WorldStateFragment>) -> Vec<Self> {
+    pub(crate) fn optional_boxed_fragment(
+        fragment: Option<Box<dyn ContextualUserFragment>>,
+    ) -> Vec<Self> {
         fragment.into_iter().map(Self::boxed_fragment).collect()
     }
 
     pub(crate) fn optional_standalone_boxed_fragment(
-        fragment: Option<WorldStateFragment>,
+        fragment: Option<Box<dyn ContextualUserFragment>>,
     ) -> Vec<Self> {
         fragment
             .into_iter()
@@ -144,9 +129,9 @@ pub(crate) fn split_prefix_updates(
     let mut context = Vec::new();
     for update in updates {
         match update.placement {
-            Placement::Prefix => prefix.push(match update.content.into_fragment() {
-                Ok(fragment) => fragment.into_boxed_response_item(),
-                Err(item) => *item,
+            Placement::Prefix => prefix.push(match update.content {
+                WorldStateUpdateContent::Item(item) => *item,
+                WorldStateUpdateContent::Fragment(fragment) => fragment.into_boxed_response_item(),
             }),
             Placement::Standalone | Placement::Mergeable => context.push(update),
         }
@@ -155,10 +140,6 @@ pub(crate) fn split_prefix_updates(
 }
 
 trait ErasedWorldStateSection: Send + Sync {
-    fn include_in_full_context(&self) -> bool {
-        true
-    }
-
     fn matches_legacy_fragment(&self, role: &str, text: &str) -> bool;
 
     fn has_retained_fragment_matcher(&self) -> bool;
@@ -241,10 +222,6 @@ impl<S: WorldStateSection> ErasedWorldStateSection for S {
 struct ExtensionWorldStateSection(WorldStateSectionContribution);
 
 impl ErasedWorldStateSection for ExtensionWorldStateSection {
-    fn include_in_full_context(&self) -> bool {
-        self.0.include_in_full_context()
-    }
-
     fn matches_legacy_fragment(&self, role: &str, text: &str) -> bool {
         self.0.matches_legacy_fragment(role, text)
     }
@@ -423,7 +400,6 @@ fn hash_component(hasher: &mut Sha1, value: &str) {
 /// Live model-visible state, keyed by the same stable section IDs used in rollouts.
 #[derive(Default)]
 pub(crate) struct WorldState {
-    pub(crate) host_roster_reader: Option<Arc<dyn AgentSessionReader>>,
     sections: IndexMap<&'static str, Box<dyn ErasedWorldStateSection>>,
 }
 
@@ -446,40 +422,8 @@ impl From<&Map<String, Value>> for WorldStateSnapshot {
 }
 
 impl WorldStateSnapshot {
-    pub(crate) fn remove_section(&mut self, id: &str) {
-        self.sections.remove(id);
-    }
-
     pub(crate) fn into_object(self) -> Map<String, Value> {
         self.sections.into_iter().collect()
-    }
-
-    fn section(&self, id: &str) -> Option<&Value> {
-        let snapshot = self.sections.get(id)?;
-        if id == PluginsInstructionsState::ID
-            && snapshot == &Value::Bool(false)
-            && let Some(retired) = self
-                .sections
-                .get(plugins_instructions::RETIRED_CHECKPOINT_ID)
-            && plugins_instructions::is_retired_checkpoint(retired)
-        {
-            return Some(retired);
-        }
-        Some(snapshot)
-    }
-
-    fn insert_section(&mut self, id: &str, mut snapshot: Value) {
-        if id == PluginsInstructionsState::ID
-            && plugins_instructions::is_retired_checkpoint(&snapshot)
-        {
-            // Keep the original section readable by clients whose snapshot type is bool.
-            self.sections.insert(
-                plugins_instructions::RETIRED_CHECKPOINT_ID.to_string(),
-                snapshot,
-            );
-            snapshot = Value::Bool(false);
-        }
-        self.sections.insert(id.to_string(), snapshot);
     }
 
     /// Returns the RFC 7386 merge patch that advances `previous` to `self`.
@@ -527,48 +471,11 @@ impl fmt::Debug for WorldState {
     }
 }
 
-enum RenderScope {
-    FullContext,
-    HistoryDiff,
-}
-
 impl WorldState {
-    /// Read the roster only when rendering an environment fragment. If the read fails,
-    /// keep rendering the rest of the fragment.
-    pub(crate) async fn resolve_host_roster(&self, updates: &mut [WorldStateUpdate]) {
-        if let Some(reader) = &self.host_roster_reader
-            && let Some(environment) =
-                updates
-                    .iter_mut()
-                    .find_map(|update| match &mut update.content {
-                        WorldStateUpdateContent::Environment(environment) => Some(environment),
-                        WorldStateUpdateContent::Fragment(_) | WorldStateUpdateContent::Item(_) => {
-                            None
-                        }
-                    })
-        {
-            match reader.children().await {
-                Ok(children) => {
-                    let roster = format_agent_paths(children.into_iter().map(|agent| agent.path));
-                    environment.subagents = (!roster.is_empty()).then_some(roster);
-                }
-                Err(_) => tracing::warn!("failed to read host agent roster for prompt context"),
-            }
-        }
-    }
-
-    pub(crate) fn full_context_excluded_section_ids(
-        &self,
-    ) -> impl Iterator<Item = &'static str> + '_ {
-        self.sections
-            .iter()
-            .filter_map(|(id, section)| (!section.include_in_full_context()).then_some(*id))
-    }
-
     pub(crate) fn add_section<S: WorldStateSection>(&mut self, section: S) {
         let id = S::ID;
         assert!(
-            id != plugins_instructions::RETIRED_CHECKPOINT_ID && !self.sections.contains_key(id),
+            !self.sections.contains_key(id),
             "duplicate world-state section ID: {id}"
         );
         self.sections.insert(id, Box::new(section));
@@ -577,7 +484,7 @@ impl WorldState {
     pub(crate) fn add_extension_section(&mut self, section: WorldStateSectionContribution) {
         let id = section.id();
         assert!(
-            id != plugins_instructions::RETIRED_CHECKPOINT_ID && !self.sections.contains_key(id),
+            !self.sections.contains_key(id),
             "duplicate world-state section ID: {id}"
         );
         let section = Box::new(ExtensionWorldStateSection(section));
@@ -590,19 +497,9 @@ impl WorldState {
         }
     }
 
-    /// Renders restorable sections as new, preserving update order and placement.
-    pub(crate) async fn render_full_with_host_roster(
-        &self,
-    ) -> (WorldStateSnapshot, Vec<WorldStateUpdate>) {
-        let (snapshot, mut updates) = self.render_full();
-        self.resolve_host_roster(&mut updates).await;
-        (snapshot, updates)
-    }
-
+    /// Renders every section as new, preserving update order and placement.
     pub(crate) fn render_full(&self) -> (WorldStateSnapshot, Vec<WorldStateUpdate>) {
-        self.render_with(RenderScope::FullContext, /*stored*/ None, |_, _| {
-            PreviousSectionState::Absent
-        })
+        self.render_with(/*stored*/ None, |_, _| PreviousSectionState::Absent)
     }
 
     /// Falls back to retained model history when no exact persisted snapshot is available.
@@ -611,8 +508,8 @@ impl WorldState {
         previous: Option<&WorldStateSnapshot>,
         items: impl IntoIterator<Item = &'a ResponseItem> + Clone,
     ) -> (WorldStateSnapshot, Vec<WorldStateUpdate>) {
-        self.render_with(RenderScope::HistoryDiff, previous, |id, section| {
-            if let Some(previous) = previous.and_then(|previous| previous.section(id)) {
+        self.render_with(previous, |id, section| {
+            if let Some(previous) = previous.and_then(|previous| previous.sections.get(id)) {
                 if section.has_retained_fragment_matcher()
                     && !has_retained_fragment(items.clone(), section)
                 {
@@ -630,25 +527,26 @@ impl WorldState {
 
     fn render_with<'a>(
         &self,
-        scope: RenderScope,
         stored: Option<&WorldStateSnapshot>,
         mut previous: impl FnMut(&str, &dyn ErasedWorldStateSection) -> PreviousSectionState<'a, Value>,
     ) -> (WorldStateSnapshot, Vec<WorldStateUpdate>) {
         let mut snapshot = WorldStateSnapshot::default();
         let mut updates = Vec::new();
         for (id, section) in &self.sections {
-            if matches!(scope, RenderScope::FullContext) && !section.include_in_full_context() {
-                continue;
-            }
             let prior = previous(id, section.as_ref());
             let (section_snapshot, section_updates) = section.render_diff(prior);
             // A skipped snapshot retains stored state even if history required a fresh render.
-            let section_snapshot = section_snapshot
-                .or_else(|| stored.and_then(|snapshot| snapshot.section(id)).cloned());
+            let section_snapshot = section_snapshot.or_else(|| {
+                stored
+                    .and_then(|snapshot| snapshot.sections.get(*id))
+                    .cloned()
+            });
             if let Some(section_snapshot) = section_snapshot
                 && !section_snapshot.is_null()
             {
-                snapshot.insert_section(id, section_snapshot);
+                snapshot
+                    .sections
+                    .insert((*id).to_string(), section_snapshot);
             }
             updates.extend(section_updates);
         }

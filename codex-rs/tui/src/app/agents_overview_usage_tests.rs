@@ -99,8 +99,7 @@ async fn selected_usage_is_cached_and_account_changes_discard_old_results() -> R
         &app_server,
         request_id,
         Ok(AgentsOverviewThreadRefresh {
-            cleared_unread: Vec::new(),
-            threads: HashMap::from([(selected, Some((threads[0].clone(), false)))]),
+            threads: HashMap::from([(selected, Some(threads[0].clone()))]),
             last_messages: HashMap::new(),
             recent_seed_complete: true,
             discovery: None,

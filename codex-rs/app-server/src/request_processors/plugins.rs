@@ -159,16 +159,8 @@ fn load_shared_plugin_ids_by_local_path(
     })
 }
 
-fn remote_plugin_service_config(
-    thread_manager: &ThreadManager,
-    config: &Config,
-) -> Result<RemotePluginServiceConfig, JSONRPCErrorError> {
-    let _ = thread_manager
-        .runtime_auth_for_config(config)
-        .map_err(|error| internal_error(error.to_string()))?;
-    Ok(thread_manager
-        .plugins_manager()
-        .remote_plugin_service_config(&config.plugins_config_input()))
+fn remote_plugin_service_config(config: &Config) -> RemotePluginServiceConfig {
+    config.plugins_config_input().remote_plugin_service_config()
 }
 
 fn share_context_for_source(
@@ -607,8 +599,7 @@ impl PluginRequestProcessor {
         let include_global_remote = context.remote_plugins_enabled() && !explicit_marketplace_kinds;
         let use_remote_global_catalog =
             include_global_remote && auth_mode.is_some_and(DomainAuthMode::uses_codex_backend);
-        let remote_plugin_service_config =
-            remote_plugin_service_config(&self.thread_manager, &config)?;
+        let remote_plugin_service_config = remote_plugin_service_config(&config);
         let plugin_policy = &config.plugins;
         let remote_catalog_cache_mode = if force_refetch {
             RemotePluginCatalogCacheMode::ForceRefetch
@@ -1065,8 +1056,7 @@ impl PluginRequestProcessor {
                 );
                 let share_context = match share_context {
                     Some(context) => {
-                        let remote_plugin_service_config =
-                            remote_plugin_service_config(&self.thread_manager, &config)?;
+                        let remote_plugin_service_config = remote_plugin_service_config(&config);
                         match codex_core_plugins::remote::fetch_remote_plugin_share_context(
                             &remote_plugin_service_config,
                             auth.as_ref(),
@@ -1194,8 +1184,7 @@ impl PluginRequestProcessor {
                         "remote plugin read is not enabled for marketplace {remote_marketplace_name}"
                     )));
                 }
-                let remote_plugin_service_config =
-                    remote_plugin_service_config(&self.thread_manager, &config)?;
+                let remote_plugin_service_config = remote_plugin_service_config(&config);
                 validate_remote_plugin_id(&plugin_name)?;
                 let remote_detail = codex_core_plugins::remote::fetch_remote_plugin_detail(
                     &remote_plugin_service_config,
@@ -1257,8 +1246,7 @@ impl PluginRequestProcessor {
         }
 
         let auth = self.auth_manager.auth().await;
-        let remote_plugin_service_config =
-            remote_plugin_service_config(&self.thread_manager, &config)?;
+        let remote_plugin_service_config = remote_plugin_service_config(&config);
         let remote_skill_detail = codex_core_plugins::remote::fetch_remote_plugin_skill_detail(
             &remote_plugin_service_config,
             auth.as_ref(),
@@ -1309,8 +1297,7 @@ impl PluginRequestProcessor {
             validate_client_plugin_share_targets(share_targets)?;
         }
 
-        let remote_plugin_service_config =
-            remote_plugin_service_config(&self.thread_manager, &config)?;
+        let remote_plugin_service_config = remote_plugin_service_config(&config);
         let access_policy = codex_core_plugins::remote::RemotePluginShareAccessPolicy {
             discoverability: discoverability.map(remote_plugin_share_discoverability),
             share_targets: share_targets.map(remote_plugin_share_targets),
@@ -1358,8 +1345,7 @@ impl PluginRequestProcessor {
         }
         validate_client_plugin_share_targets(&share_targets)?;
 
-        let remote_plugin_service_config =
-            remote_plugin_service_config(&self.thread_manager, &config)?;
+        let remote_plugin_service_config = remote_plugin_service_config(&config);
         let result = codex_core_plugins::remote::update_remote_plugin_share_targets(
             &remote_plugin_service_config,
             auth.as_ref(),
@@ -1393,8 +1379,7 @@ impl PluginRequestProcessor {
         _params: PluginShareListParams,
     ) -> Result<PluginShareListResponse, JSONRPCErrorError> {
         let (config, auth) = self.load_plugin_share_config_and_auth().await?;
-        let remote_plugin_service_config =
-            remote_plugin_service_config(&self.thread_manager, &config)?;
+        let remote_plugin_service_config = remote_plugin_service_config(&config);
         let plugin_policy = &config.plugins;
         let data = codex_core_plugins::remote::list_remote_plugin_shares(
             &remote_plugin_service_config,
@@ -1432,8 +1417,7 @@ impl PluginRequestProcessor {
             return Err(invalid_request("invalid remote plugin id"));
         }
 
-        let remote_plugin_service_config =
-            remote_plugin_service_config(&self.thread_manager, &config)?;
+        let remote_plugin_service_config = remote_plugin_service_config(&config);
         let result = codex_core_plugins::remote::checkout_remote_plugin_share(
             &remote_plugin_service_config,
             auth.as_ref(),
@@ -1464,8 +1448,7 @@ impl PluginRequestProcessor {
             return Err(invalid_request("invalid remote plugin id"));
         }
 
-        let remote_plugin_service_config =
-            remote_plugin_service_config(&self.thread_manager, &config)?;
+        let remote_plugin_service_config = remote_plugin_service_config(&config);
         codex_core_plugins::remote::delete_remote_plugin_share(
             &remote_plugin_service_config,
             auth.as_ref(),
@@ -1616,10 +1599,6 @@ impl PluginRequestProcessor {
         install_attempt_id: Option<String>,
     ) -> Result<PluginInstallResponse, JSONRPCErrorError> {
         let mut config = self.load_latest_config(/*fallback_cwd*/ None).await?;
-        let _ = self
-            .thread_manager
-            .runtime_auth_for_config(&config)
-            .map_err(|error| internal_error(error.to_string()))?;
         let auth = match self.auth_manager.auth_with_http_client_factory().await {
             Some((auth, factory)) => {
                 config.application_network_policy = factory.network_policy().clone();
@@ -2126,10 +2105,6 @@ impl PluginRequestProcessor {
         plugin_id: String,
     ) -> Result<PluginUninstallResponse, JSONRPCErrorError> {
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
-        let _ = self
-            .thread_manager
-            .runtime_auth_for_config(&config)
-            .map_err(|error| internal_error(error.to_string()))?;
         let auth = self.auth_manager.auth().await;
         let outcome = self
             .thread_manager

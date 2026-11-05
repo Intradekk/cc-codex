@@ -127,11 +127,7 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
                     }
                 }
                 "thread/read" => {
-                    let thread = rows
-                        .iter()
-                        .find(|thread| thread.id == params["threadId"])
-                        .unwrap();
-                    json!({"thread": thread, "readState": {"revision": "read", "firstUnread": null}})
+                    json!({"thread": rows.iter().find(|thread| thread.id == params["threadId"]).unwrap()})
                 }
                 "thread/turns/list" => json!({"data": [], "nextCursor": null}),
                 method => panic!("unexpected request: {method}"),
@@ -193,13 +189,10 @@ async fn check_discovery(mixed_sources: bool) -> Result<()> {
             .collect::<HashSet<_>>(),
         expected_first_twenty
     );
-    // Another client read this older, unloaded task while the center was closed.
-    app.agents_overview.unread.insert(ids[19]);
     app.remove_agents_overview_thread(ids[1]);
     expected.remove(&ids[1]);
     app.refresh_agents_overview_threads(&session);
     finish_overview_refresh(&mut app, &session, &mut rx).await;
-    assert!(!app.agents_overview.unread.contains(&ids[19]));
     assert_eq!(app.agents_overview.threads.len(), 20);
     assert!(app.agents_overview.threads.contains_key(&ids[21]));
     for &id in &ids[2..22] {

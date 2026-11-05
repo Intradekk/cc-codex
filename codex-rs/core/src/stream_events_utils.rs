@@ -2,7 +2,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use codex_extension_api::ExtensionData;
-use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::ModeKind;
@@ -17,6 +16,7 @@ use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::call_trace;
 use crate::tools::parallel::ToolCallRuntime;
+use crate::tools::router::ToolRouter;
 use codex_memories_read::citations::parse_memory_citation;
 use codex_memories_read::citations::thread_ids_from_memory_citation;
 use codex_protocol::error::CodexErr;
@@ -97,18 +97,10 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
     finalized_facts: Option<&FinalizedTurnItemFacts>,
 ) {
     let turn_context = &step_context.turn;
-    sess.record_annotated_conversation_items(
+    sess.record_conversation_items(
         turn_context,
         &step_context.settings.model_info,
-        vec![ResponseItemEnvelope {
-            item: item.clone(),
-            metadata: step_context
-                .sampled_through_sequence
-                .map(|sequence| CodexHarnessMetadata {
-                    sampled_through_sequence: Some(sequence),
-                    ..Default::default()
-                }),
-        }],
+        std::slice::from_ref(item),
     )
     .await;
     if turn_context.config.otel.agent_response_logging_enabled() {
@@ -267,7 +259,6 @@ pub(crate) enum TurnItemContributorPolicy<'a> {
 pub(crate) struct FinalizedTurnItem {
     pub(crate) turn_item: TurnItem,
     pub(crate) facts: FinalizedTurnItemFacts,
-    pub(crate) content_token_count: Option<u64>,
 }
 
 #[derive(Clone, Default)]
@@ -313,16 +304,6 @@ pub(crate) async fn finalize_non_tool_response_item(
             _ => (None, None, false),
         };
     Some(FinalizedTurnItem {
-        content_token_count: match item {
-            ResponseItem::Message {
-                role,
-                internal_chat_message_metadata_passthrough,
-                ..
-            } if role == "assistant" => internal_chat_message_metadata_passthrough
-                .as_ref()
-                .and_then(|metadata| metadata.content_token_count),
-            _ => None,
-        },
         turn_item,
         facts: FinalizedTurnItemFacts {
             memory_citation,
@@ -341,7 +322,7 @@ pub(crate) async fn handle_output_item_done(
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.step_context.turn.mode() == ModeKind::Plan;
 
-    match ctx.step_context.tool_router.build_tool_call(item.clone()) {
+    match ToolRouter::build_tool_call(item.clone()) {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
             call_trace::received(
@@ -415,12 +396,7 @@ pub(crate) async fn handle_output_item_done(
                 }
 
                 ctx.sess
-                    .emit_turn_item_completed_with_metadata(
-                        &ctx.step_context.turn,
-                        finalized_turn_item.turn_item,
-                        finalized_turn_item.content_token_count,
-                        /*user_input_extension_data*/ None,
-                    )
+                    .emit_turn_item_completed(&ctx.step_context.turn, finalized_turn_item.turn_item)
                     .await;
             }
             record_completed_response_item_with_finalized_facts(

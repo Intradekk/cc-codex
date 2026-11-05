@@ -352,7 +352,6 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
         r#match: Option<UnpackList<Value<'v>>>,
         not_match: Option<UnpackList<Value<'v>>>,
         justification: Option<&'v str>,
-        canonical_matching: Option<bool>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<NoneType> {
         let decision = match decision {
@@ -394,7 +393,6 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
             .map(|head| {
                 Arc::new(PrefixRule {
                     pattern: PrefixPattern {
-                        canonical_matching: canonical_matching.unwrap_or(false),
                         first: Arc::from(head.as_str()),
                         rest: rest.clone(),
                     },

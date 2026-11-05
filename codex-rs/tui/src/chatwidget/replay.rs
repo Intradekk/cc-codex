@@ -391,7 +391,7 @@ impl ChatWidget {
             item @ ThreadItemPayload::CommandExecution {
                 status: codex_app_server_protocol::CommandExecutionStatus::InProgress,
                 ..
-            } => self.on_command_execution_started(item, render_source),
+            } => self.on_command_execution_started(item),
             item @ ThreadItemPayload::CommandExecution {
                 source: ExecCommandSource::Agent | ExecCommandSource::UnifiedExecStartup,
                 status:

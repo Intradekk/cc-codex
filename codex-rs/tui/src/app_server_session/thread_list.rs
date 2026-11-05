@@ -11,7 +11,7 @@ impl AppServerSession {
         loop {
             let request_id = self.next_request_id();
             let response = self
-                .request_handle
+                .client
                 .request_typed(ClientRequest::ThreadList {
                     request_id,
                     params: params.clone(),

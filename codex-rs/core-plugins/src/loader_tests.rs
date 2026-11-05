@@ -530,7 +530,6 @@ fn configured_plugins_from_stack_merges_enabled_effective_layers() {
                     release_id: None,
                     auto_provision: None,
                     mcp_servers: HashMap::new(),
-                    apps: HashMap::new(),
                 },
             ),
             (
@@ -541,7 +540,6 @@ fn configured_plugins_from_stack_merges_enabled_effective_layers() {
                     release_id: None,
                     auto_provision: None,
                     mcp_servers: project_mcp_servers.clone(),
-                    apps: HashMap::new(),
                 },
             ),
             (
@@ -552,7 +550,6 @@ fn configured_plugins_from_stack_merges_enabled_effective_layers() {
                     release_id: None,
                     auto_provision: None,
                     mcp_servers: HashMap::new(),
-                    apps: HashMap::new(),
                 },
             ),
         ])

@@ -114,7 +114,7 @@ pub(super) async fn run_session_queue_action_with_app_server(
                 // An empty filter includes Atlas/ChatGPT sessions.
                 Vec::new(),
             ],
-            /*model_providers*/ None,
+            /*model_provider*/ None,
         )
         .await?
         .ok_or_else(|| eyre!("No active session found matching '{target}'."))?;

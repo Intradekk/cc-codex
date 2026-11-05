@@ -102,6 +102,7 @@ use codex_features::Stage;
 use codex_features::is_known_feature_key;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_login::AuthManager;
+use codex_login::is_workload_identity_selected;
 use codex_memories_write::clear_memory_roots_contents;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::RefreshStrategy;
@@ -143,7 +144,7 @@ struct MultitoolCli {
 
 #[derive(Debug, clap::Subcommand)]
 enum Subcommand {
-    /// Open the agent command center to browse and switch sessions.
+    /// Browse all agent sessions on the shared local app-server daemon.
     Agents(AgentsCommand),
 
     /// Internal: forward a local TCP socket through an HTTP/3 CONNECT proxy.
@@ -336,8 +337,8 @@ struct DebugTraceReduceCommand {
 
 #[derive(Debug, Parser)]
 struct AgentsCommand {
-    /// Run the agents overview with an embedded app server.
-    #[arg(long)]
+    /// The agents overview requires a shared server; this option is rejected.
+    #[arg(long, hide = true)]
     no_daemon: bool,
     #[clap(flatten)]
     remote: InteractiveRemoteOptions,
@@ -770,7 +771,10 @@ fn handle_app_exit(
             eprintln!("ERROR: {message}");
             true
         }
-        ExitReason::UserRequested | ExitReason::TurnInterrupted => false,
+        ExitReason::UserRequested
+        | ExitReason::Archived(_)
+        | ExitReason::TurnInterrupted
+        | ExitReason::ThreadRemoved => false,
     };
 
     let update_action = exit_info.update_action;
@@ -848,8 +852,6 @@ fn run_update_action(
                 .collect();
             std::process::Command::new(&command_path)
                 .args(&normalized_args)
-                // Package managers search parent directories for project config and hooks.
-                .current_dir("/")
                 .status()?
         }
     };
@@ -1038,18 +1040,16 @@ fn main() -> anyhow::Result<()> {
     codex_build_info::initialize!();
     let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
     arg0_dispatch_or_else(move |arg0_paths: Arg0DispatchPaths| async move {
-        // Finish polling the large subcommand dispatcher before polling interactive TUI events.
-        if let Some(tui) = Box::pin(dispatch_cli(arg0_paths, remote_control_disabled)).await? {
-            tui.await?;
-        }
+        // Keep the CLI dispatcher off the runtime's stack while the TUI rebuilds a thread.
+        Box::pin(cli_main(arg0_paths, remote_control_disabled)).await?;
         Ok(())
     })
 }
 
-async fn dispatch_cli(
+async fn cli_main(
     arg0_paths: Arg0DispatchPaths,
     remote_control_disabled: bool,
-) -> anyhow::Result<Option<impl Future<Output = anyhow::Result<()>>>> {
+) -> anyhow::Result<()> {
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
@@ -1101,11 +1101,6 @@ async fn dispatch_cli(
         profile_v2_for_subcommand(&interactive, subcommand)?;
     }
 
-    let launch_tui = move |interactive, remote, auth_token_env, arg0_paths| async move {
-        let exit_info =
-            run_interactive_tui(interactive, remote, auth_token_env, arg0_paths).await?;
-        handle_app_exit(exit_info, daemon_cli_executable.as_deref())
-    };
     let open_agents_overview = matches!(&subcommand, Some(Subcommand::Agents(_)));
     match subcommand {
         None | Some(Subcommand::Agents(_)) => {
@@ -1136,17 +1131,32 @@ async fn dispatch_cli(
                         "`codex agents` cannot apply local provider or additional-directory overrides to a remote server"
                     );
                 }
+                if is_workload_identity_selected() {
+                    anyhow::bail!(
+                        "`codex agents` is unavailable while workload identity is active"
+                    );
+                }
+                if root_remote.is_none() {
+                    resolve_remote_endpoint(
+                        /*remote*/ None,
+                        root_remote_auth_token_env.clone(),
+                    )?;
+                    #[cfg(not(any(unix, windows)))]
+                    anyhow::bail!("`codex agents` requires `--remote` on this platform");
+                }
                 interactive.agents_overview = true;
             }
-            return Ok(Some(launch_tui(
+            let exit_info = run_interactive_tui(
                 interactive,
-                root_remote,
-                root_remote_auth_token_env,
-                arg0_paths,
-            )));
+                root_remote.clone(),
+                root_remote_auth_token_env.clone(),
+                arg0_paths.clone(),
+            )
+            .await?;
+            handle_app_exit(exit_info, daemon_cli_executable.as_deref())?;
         }
         Some(Subcommand::TcpTunnel(args)) => {
-            codex_tcp_tunnel::run(args).await?;
+            return codex_tcp_tunnel::run(args).await;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -1259,15 +1269,15 @@ async fn dispatch_cli(
                     subcommand.is_none(),
                     "--print-startup-config cannot run a subcommand"
                 );
-                codex_app_server::print_startup_config(
+                return codex_app_server::print_startup_config(
                     arg0_paths,
                     root_config_overrides,
                     LoaderOverrides::default(),
                     strict_config,
                     startup_config,
                 )
-                .await?;
-                return Ok(None);
+                .await
+                .map_err(Into::into);
             }
             match subcommand {
                 None => {
@@ -1412,7 +1422,7 @@ async fn dispatch_cli(
                     AppServerDaemonSubcommand::PidUpdateLoop {
                         check_package_ownership: true,
                         ..
-                    } => return Ok(None),
+                    } => return Ok(()),
                     AppServerDaemonSubcommand::Update {
                         from_cli: false, ..
                     }
@@ -1535,12 +1545,16 @@ async fn dispatch_cli(
                 include_non_interactive,
                 config_overrides,
             );
-            return Ok(Some(launch_tui(
+            let exit_info = run_interactive_tui(
                 interactive,
-                remote.remote.or(root_remote),
-                remote.remote_auth_token_env.or(root_remote_auth_token_env),
-                arg0_paths,
-            )));
+                remote.remote.or(root_remote.clone()),
+                remote
+                    .remote_auth_token_env
+                    .or(root_remote_auth_token_env.clone()),
+                arg0_paths.clone(),
+            )
+            .await?;
+            handle_app_exit(exit_info, daemon_cli_executable.as_deref())?;
         }
         Some(Subcommand::Archive(cmd)) => {
             let output = run_session_archive_cli_command(
@@ -1631,12 +1645,16 @@ async fn dispatch_cli(
                 all,
                 config_overrides,
             );
-            return Ok(Some(launch_tui(
+            let exit_info = run_interactive_tui(
                 interactive,
-                remote.remote.or(root_remote),
-                remote.remote_auth_token_env.or(root_remote_auth_token_env),
-                arg0_paths,
-            )));
+                remote.remote.or(root_remote.clone()),
+                remote
+                    .remote_auth_token_env
+                    .or(root_remote_auth_token_env.clone()),
+                arg0_paths.clone(),
+            )
+            .await?;
+            handle_app_exit(exit_info, daemon_cli_executable.as_deref())?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -1761,7 +1779,7 @@ async fn dispatch_cli(
                     .parse_overrides()
                     .map_err(anyhow::Error::msg)?;
                 sandbox_setup::run(setup_cli, config_profile.cloned(), cli_overrides).await?;
-                return Ok(None);
+                return Ok(());
             }
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
@@ -1769,8 +1787,7 @@ async fn dispatch_cli(
                 "sandbox",
             )?;
             if let Some(SandboxSubcommand::Uninstall(command)) = subcommand {
-                command.run()?;
-                return Ok(None);
+                return command.run();
             }
             let loader_overrides = loader_overrides_for_profile(config_profile)?;
             #[cfg(target_os = "macos")]
@@ -1950,7 +1967,7 @@ async fn dispatch_cli(
         },
     }
 
-    Ok(None)
+    Ok(())
 }
 
 fn profile_v2_for_subcommand<'a>(
@@ -2189,20 +2206,7 @@ async fn run_debug_models_command(
             .await?;
         let auth_manager =
             AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ true).await?;
-        let runtime_auth = if config
-            .features
-            .enabled(codex_features::Feature::RuntimeAgentInstances)
-        {
-            let installation_id = codex_core::resolve_installation_id(&config.codex_home).await?;
-            codex_core::build_runtime_auth_manager(
-                &config,
-                Arc::clone(&auth_manager),
-                &installation_id,
-            )
-        } else {
-            None
-        };
-        let models_manager = build_models_manager(&config, auth_manager, runtime_auth);
+        let models_manager = build_models_manager(&config, auth_manager);
         models_manager
             .raw_model_catalog(
                 RefreshStrategy::OnlineIfUncached,
@@ -2496,10 +2500,17 @@ async fn run_interactive_tui(
     remote_auth_token_env: Option<String>,
     arg0_paths: Arg0DispatchPaths,
 ) -> std::io::Result<AppExitInfo> {
-    if interactive.no_daemon && remote.is_some() {
-        return Ok(AppExitInfo::fatal(
-            "--no-daemon cannot be used with --remote.",
-        ));
+    if interactive.no_daemon {
+        if interactive.agents_overview {
+            return Ok(AppExitInfo::fatal(
+                "--no-daemon cannot be used with codex agents. The agents overview requires a shared server. Use codex --no-daemon to work without it.",
+            ));
+        }
+        if remote.is_some() {
+            return Ok(AppExitInfo::fatal(
+                "--no-daemon cannot be used with --remote.",
+            ));
+        }
     }
     if let Some(prompt) = interactive.prompt.take() {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
@@ -2524,6 +2535,25 @@ async fn run_interactive_tui(
         }
     }
 
+    #[cfg(any(unix, windows))]
+    if interactive.agents_overview && remote.is_none() {
+        if !std::io::stdin().is_terminal() {
+            return Ok(AppExitInfo::fatal("stdin is not a terminal"));
+        }
+        if !std::io::stdout().is_terminal() {
+            return Ok(AppExitInfo::fatal("stdout is not a terminal"));
+        }
+        cloud_config::load_config(&interactive.config_overrides, LoaderOverrides::default())
+            .await
+            .map_err(std::io::Error::other)?;
+        let output = codex_app_server_daemon::run(AppServerLifecycleCommand::Start)
+            .await
+            .map_err(|err| std::io::Error::other(format!(
+                "{err:#}\nThe agents overview requires a shared server. Use codex --no-daemon to work without it."
+            )))?;
+        interactive.managed_daemon = output.backend.is_some();
+    }
+
     let remote_endpoint = match resolve_remote_endpoint(remote, remote_auth_token_env.clone()) {
         Ok(remote_endpoint) => remote_endpoint,
         Err(err) if is_remote_auth_usage_error(&err) => {
@@ -2531,14 +2561,6 @@ async fn run_interactive_tui(
         }
         Err(err) => return Err(err),
     };
-    if interactive.agents_overview && remote_endpoint.is_none() {
-        if !std::io::stdin().is_terminal() {
-            return Ok(AppExitInfo::fatal("stdin is not a terminal"));
-        }
-        if !std::io::stdout().is_terminal() {
-            return Ok(AppExitInfo::fatal("stdout is not a terminal"));
-        }
-    }
     let start_tui = || {
         codex_tui::run_main(
             interactive.clone(),
@@ -3878,6 +3900,20 @@ enabled = true
         exit_info.resume_hint = None;
         let lines = exit_info.format_exit_messages(/*color_enabled*/ false);
         insta::assert_snapshot!(lines.join("\n"), @"Session ID: 123e4567-e89b-12d3-a456-426614174000");
+    }
+
+    #[test]
+    fn format_exit_messages_confirms_archive() {
+        let mut exit_info = sample_exit_info(
+            Some("123e4567-e89b-12d3-a456-426614174000"),
+            /*thread_name*/ None,
+        );
+        exit_info.exit_reason = ExitReason::Archived(exit_info.thread_id.unwrap());
+        let lines = exit_info.format_exit_messages(/*color_enabled*/ false);
+        insta::assert_snapshot!(lines.join("\n"), @"
+        Token usage: total=2 input=0 output=2
+        Session archived: 123e4567-e89b-12d3-a456-426614174000
+        ");
     }
 
     #[test]

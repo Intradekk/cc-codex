@@ -1,6 +1,5 @@
 use super::*;
 use codex_context_fragments::AnnotatedContent;
-use codex_protocol::models::AudioReference;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::input_text;
@@ -28,7 +27,7 @@ impl WorldStateSection for TestSection {
         previous: PreviousSectionState<'_, Self::Snapshot>,
     ) -> SectionTransition<Self::Snapshot> {
         let current = self.clone();
-        let fragment: Option<super::WorldStateFragment> = match previous {
+        let fragment: Option<Box<dyn ContextualUserFragment>> = match previous {
             PreviousSectionState::Known(previous) if self.value != previous.value => {
                 Some(Box::new(TestFragment(self.value.clone())))
             }
@@ -82,9 +81,7 @@ fn world_state_hash_tracks_typed_content_and_role() {
                 role,
                 ("", ""),
                 ContentItem::InputAudio {
-                    audio: AudioReference::Inline {
-                        audio_url: audio_url.to_string(),
-                    },
+                    audio_url: audio_url.to_string(),
                 },
             ),
             content_kind: ContentItemKind("generic.test".to_string()),
@@ -520,9 +517,9 @@ fn mixed_output_preserves_order_and_restores_its_snapshot() {
     assert_eq!(
         context
             .into_iter()
-            .map(|update| match update.content.into_fragment() {
-                Ok(fragment) => fragment.into_boxed_response_item(),
-                Err(item) => *item,
+            .map(|update| match update.content {
+                WorldStateUpdateContent::Fragment(fragment) => fragment.into_boxed_response_item(),
+                WorldStateUpdateContent::Item(item) => *item,
             })
             .collect::<Vec<_>>(),
         vec![

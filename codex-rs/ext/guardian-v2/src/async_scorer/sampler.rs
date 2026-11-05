@@ -25,6 +25,7 @@ use codex_http_client::HttpClientFactory;
 use codex_login::AgentIdentityAuthPolicy;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::WorkspaceRoutingContext;
+use codex_protocol::ResponseItemId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -74,8 +75,6 @@ pub struct LunaSamplerConfig {
 
 /// One tool-less Luna classification request.
 pub struct LunaSamplingRequest {
-    /// Generator selected by the owning session for response items.
-    pub item_id_generator: codex_protocol::ItemIdGenerator,
     /// Cyber selection captured from the owning turn; Daybreak reviews use Blue.
     pub cyber_access_program: Option<CyberAccessProgram>,
     /// ID of the response handling the classified tool.
@@ -212,7 +211,7 @@ impl LunaSampler {
             if item.id().is_none()
                 && let Some(prefix) = item.id_prefix()
             {
-                item.set_id(Some((request.item_id_generator)(prefix)));
+                item.set_id(Some(ResponseItemId::new(prefix)));
             }
         }
         let tokens = input
@@ -245,7 +244,6 @@ impl LunaSampler {
             include: Vec::new(),
             service_tier: None,
             prompt_cache_key: Some(format!("guardian-v2:{}", self.config.thread_id)),
-            prompt_cache_options: None,
             text: None,
             client_metadata: None,
             access_programs: None,

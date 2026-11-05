@@ -32,7 +32,6 @@ pub mod exec_server;
 pub mod hooks;
 pub mod process;
 pub mod responses;
-pub mod runtime_auth;
 pub mod startup;
 pub mod streaming_sse;
 pub mod test_codex;
